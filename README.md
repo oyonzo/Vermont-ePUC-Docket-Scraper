@@ -23,7 +23,7 @@ No `pip` installations are needed.
 
 2.  When prompted, paste one or more case URLs, **one per line**, in this format:
 
-        https://epuc.vermont.gov/?q=node/64/########
+        https://epuc.vermont.gov/?q=node/(64|104)/########
 
 3.  Press **Enter on a blank line** to begin processing.
 

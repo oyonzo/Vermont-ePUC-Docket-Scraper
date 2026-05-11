@@ -14,7 +14,7 @@ from datetime import datetime
 # Config
 # ------------------------------------------------------------
 VALID_CASE_URL = re.compile(
-    r"^https://epuc\.vermont\.gov/\?q=node/64/\d+$"
+    r"^https://epuc\.vermont\.gov/\?q=node/(64|104)/\d+$"
 )
 
 def validate_case_url(url):
@@ -22,12 +22,15 @@ def validate_case_url(url):
         raise ValueError(
             f"Invalid URL:\n{url}\n\n"
             "Only URLs of this form are allowed:\n"
-            "https://epuc.vermont.gov/?q=node/64/########"
+            "https://epuc.vermont.gov/?q=node/(64|104)/########"
         )
     return url
 
 def normalize_case_url(url):
-    m = re.match(r"(https://epuc\.vermont\.gov/\?q=node/64/\d+)", url)
+    m = re.match(
+        r"(https://epuc\.vermont\.gov/\?q=node/(64|104)/\d+)",
+        url
+    )
     if m:
         return validate_case_url(m.group(1))
     raise ValueError("Invalid case URL")
@@ -35,7 +38,7 @@ def normalize_case_url(url):
 def prompt_for_links():
     print("Paste case URLs (one per line).")
     print("Required format:")
-    print("https://epuc.vermont.gov/?q=node/64/########")
+    print("https://epuc.vermont.gov/?q=node/(64|104)/########")
     print("Press Enter on a blank line to start.\n")
 
     links = []
@@ -144,9 +147,36 @@ class TabParser(HTMLParser):
         elif tag == "div" and self.in_tabs:
             self.in_tabs = False
 
+# ------------------------------------------------------------
+# Legacy parser
+# ------------------------------------------------------------
+
+class LegacyCaseHeaderParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.in_td = False
+        self.current_text = ""
+        self.lines = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "td":
+            self.in_td = True
+            self.current_text = ""
+
+    def handle_data(self, data):
+        if self.in_td:
+            text = data.strip()
+            if text:
+                self.current_text += text
+
+    def handle_endtag(self, tag):
+        if tag == "td" and self.in_td:
+            if self.current_text:
+                self.lines.append(self.current_text)
+            self.in_td = False
 
 # ------------------------------------------------------------
-# Document parser (same as before, layout-agnostic)
+# Document parser
 # ------------------------------------------------------------
 
 class DownloadLinkParser(HTMLParser):
@@ -205,7 +235,6 @@ class DownloadLinkParser(HTMLParser):
 # ------------------------------------------------------------
 for START_URL in START_URLS:
     print("\nProcessing:", START_URL)
-    # existing logic follows unchanged
 
     print("Loading main page to discover tabs...")
     html = urlopen(START_URL).read().decode("utf-8")
@@ -213,17 +242,50 @@ for START_URL in START_URLS:
     # ------------------------------------------------------------
     # Extract docket number + case name for root folder
     # ------------------------------------------------------------
-
+    
+    # Try modern case header first
     header_parser = CaseHeaderParser()
     header_parser.feed(html)
+
+    docket = None
+    case_name = None
 
     if len(header_parser.values) >= 2:
         docket = clean_filename(header_parser.values[0])
         case_name = clean_filename(header_parser.values[1])
-        root_folder_name = f"{docket} - {case_name}"
     else:
-        # Fallback in case parsing ever fails
-        root_folder_name = "PUC Case Files"
+        # Fallback to legacy case layout
+        legacy_parser = LegacyCaseHeaderParser()
+        legacy_parser.feed(html)
+
+        petitioner = None
+        case_type = None
+
+        for line in legacy_parser.lines:
+            # First non-empty cell is the docket number (legacy behavior)
+            if docket is None:
+                docket = line
+                continue
+
+            # Case name components
+            if line.lower().startswith("petitioner"):
+                petitioner = line.split(":", 1)[-1].strip()
+
+            elif "legacy" in line.lower():
+                case_type = line
+
+        if petitioner:
+            case_name = clean_filename(
+                petitioner + (" - " + case_type if case_type else " (Legacy)")
+            )
+            # Final fallback
+            if not case_name:
+                case_name = "PUC Docket #"
+
+            if not docket:
+                docket = "PUC Docket #"
+
+    root_folder_name = f"{docket} - {case_name}"
 
     ROOT_DOWNLOAD_DIR = Path.home() / "Downloads" / root_folder_name
     ROOT_DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -288,6 +350,6 @@ for START_URL in START_URLS:
             except Exception as e:
                 print("Failed:", filename, e)
 
-    print("\n✅ All tabs processed in " + case_name)
+    print("\n✅ All tabs processed in " + docket)
     
 print("\n✅ All cases processed.")
