@@ -1,4 +1,4 @@
-# Vermont PUC Case Downloader
+# Vermont ePUC Docket Scraper
 
 ## Requirements
 
